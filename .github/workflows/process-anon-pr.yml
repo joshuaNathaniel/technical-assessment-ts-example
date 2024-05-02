@@ -1,0 +1,61 @@
+name: Process Anonymous Pull Request Review
+on:
+  repository_dispatch:
+    types:
+      - pull_request_review_submitted
+
+jobs:
+  process-anonymous-pr-review:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.BOT_SERVICE_TOKEN }}
+    steps:
+      - name: Close the Pull Request
+        run: |
+          curl -s -X PATCH \
+          -H "Authorization: token ${{ secrets.BOT_SERVICE_TOKEN }}" \
+          -H "Accept: application/vnd.github+json" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          https://api.github.com/repos/${{ github.event.client_payload.repository.full_name }}/pulls/${{ github.event.client_payload.pull_request.number }} \
+          -d '{"state": "closed"}'
+      - name: Get USER_ID from PR
+        run: |
+          USER_ID=$(echo "${{ github.event.client_payload.pull_request.title }}" | sed "s/Candidate: //")
+          echo "USER_ID=$USER_ID" >> $GITHUB_ENV
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v1.1.1
+        with:
+          credentials_json: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS }}
+          token_format: access_token
+          access_token_lifetime: 360s
+          access_token_scopes: "https://www.googleapis.com/auth/spreadsheets.readonly"
+      - name: Set APP_ID
+        run: |
+          curl -s -X GET -H "Authorization: Bearer ${{ steps.auth.outputs.access_token }}" \
+          https://sheets.googleapis.com/v4/spreadsheets/${{ secrets.CANDIDATES_SHEET_ID }}/values/Sheet1!A1:Z1000 | jq -r '.values[] | select(.[1] == "${{ env.USER_ID }}" ) | .[0]' > appid.txt
+          APP_ID=$(cat appid.txt)
+          echo $APP_ID
+          echo "APP_ID=$APP_ID" >> $GITHUB_ENV
+      - name: Advance Candidate in Greenhouse
+        if: github.event.client_payload.review.state == 'approved'
+        run: |
+          echo "Candidate approved"
+          token=$(echo -n "${{ secrets.GREENHOUSE_HARVEST_API_TOKEN }}:" | base64)
+          stage_id=$(curl -s 'https://harvest.greenhouse.io/v1/applications/${{ env.APP_ID }}' \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Basic $token" | jq -r '.current_stage.id')
+          curl -X POST 'https://harvest.greenhouse.io/v1/applications/${{ env.APP_ID }}/advance' \
+          -H "Content-Type: application/json" \
+          -H "On-Behalf-Of: ${{ secrets.GREENHOUSE_BOT_ID }}" \
+          -H "Authorization: Basic $token" -d "{\"from_stage_id\": $stage_id}"
+      - name: Reject Candidate in Greenhouse
+        if: github.event.client_payload.review.state == 'changes_requested'
+        run: |
+          token=$(echo -n "${{ secrets.GREENHOUSE_HARVEST_API_TOKEN }}:" | base64)
+          echo "Candidate rejected"
+          curl -s -X POST 'https://harvest.greenhouse.io/v1/applications/${{ env.APP_ID }}/reject' \
+          -H "Content-Type: application/json" \
+          -H "On-Behalf-Of: ${{ secrets.GREENHOUSE_BOT_ID }}" \
+          -H "Authorization: Basic $token" \
+          -d "{\"rejection_reason_id\":4003319007,\"notes\":\"${{ github.event.client_payload.review.body }}\",\"rejection_email\":{\"email_template_id\":4031350007}}"

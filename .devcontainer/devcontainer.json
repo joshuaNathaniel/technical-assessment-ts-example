@@ -1,0 +1,18 @@
+{
+  "image": "mcr.microsoft.com/vscode/devcontainers/base",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "lts"
+    }
+  },
+  "postStartCommand": "nvm install & pnpm install",
+  "forwardPorts": [3000],
+  "remoteUser": "vscode",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vsliveshare.vsliveshare"
+      ]
+    }
+  }
+}

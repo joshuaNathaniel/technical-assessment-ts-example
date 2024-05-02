@@ -1,0 +1,9 @@
+# Required for cloning repository
+.gitignore
+.gitignore.bak
+
+# Recommended
+.github
+
+# Project specific
+acceptance
